@@ -10,6 +10,7 @@ class STP_Switch(simple_switch_stp_13.SimpleSwitch13):
     def __init__(self, *args, **kwargs):
         super(STP_Switch, self).__init__(*args, **kwargs)
         self.datapaths = {}
+        self.rr = 0
 
     def is_voip_packet(self, pkt):
         VOIP_PORTS = {
@@ -135,6 +136,16 @@ class STP_Switch(simple_switch_stp_13.SimpleSwitch13):
         self.add_flow(s1_dp, priority, match, actions)
 
         self.logger.info("VoIP path installed: s1->s3->s2")
+    def choose_nonvoip_out_port_on_s1(self):
+        """
+        Round-robin wybór wyjścia dla non-VoIP na S1.
+        """
+        S1_TO_S4_PORT = 3
+        S1_TO_S5_PORT = 4  # tymczasowo, potwierdzimy
+
+        out_port = S1_TO_S4_PORT if (self.rr % 2 == 0) else S1_TO_S5_PORT
+        self.rr += 1
+        return out_port
 
     def block_nonvoip_on_optimal_path(self):
         """Block non-VoIP traffic from using optimal path s1->s3->s2"""
@@ -149,20 +160,24 @@ class STP_Switch(simple_switch_stp_13.SimpleSwitch13):
         priority = 50  # Higher than normal (1) but lower than VoIP (100)
 
         # S1: Redirect non-VoIP traffic to s4 (port 3) instead of s3 (port 2)
+        out_port = self.choose_nonvoip_out_port_on_s1()
+        #Catch-all: any IPv4 (including ICMP) should NOT use optimal path unless overridden by VoIP (priority 100)
+        match = s1_dp.ofproto_parser.OFPMatch(eth_type=0x0800)
+        actions = [s1_dp.ofproto_parser.OFPActionOutput(out_port)]
+        self.add_flow(s1_dp, priority, match, actions)
         match = s1_dp.ofproto_parser.OFPMatch(
             eth_type=0x0800,
             ip_proto=17,  # UDP only (but not VoIP ports due to lower priority)
         )
-        actions = [s1_dp.ofproto_parser.OFPActionOutput(3)]  # Use s4 path
+        actions = [s1_dp.ofproto_parser.OFPActionOutput(out_port)]  # Use s4 path
         self.add_flow(s1_dp, priority, match, actions)
 
         # Also block TCP traffic from optimal path on S1
         match = s1_dp.ofproto_parser.OFPMatch(eth_type=0x0800, ip_proto=6)  # TCP
-        actions = [s1_dp.ofproto_parser.OFPActionOutput(3)]  # Use s4 path
+        actions = [s1_dp.ofproto_parser.OFPActionOutput(out_port)]  # Use s4 path
         self.add_flow(s1_dp, priority, match, actions)
 
         self.logger.info("Non-VoIP traffic blocked from optimal path s1->s3->s2")
-
     @set_ev_cls(stplib.EventPacketIn, MAIN_DISPATCHER)
     def _packet_in_handler(self, ev):
         msg = ev.msg

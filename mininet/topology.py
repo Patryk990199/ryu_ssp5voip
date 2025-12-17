@@ -77,7 +77,7 @@ def main():
     info("\n*** Waiting 45 seconds for STP to converge...\n")
     sleep(45)
 
-    # start_traffic(net)
+    start_traffic(net)
 
     CLI(net)
     net.stop()
